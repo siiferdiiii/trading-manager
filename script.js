@@ -32,6 +32,16 @@ let miniDistributionChart = null;
 let currentEditTradeId = null;
 let geminiApiKey = localStorage.getItem('geminiApiKey') || '';
 
+// Utility: Format Currency
+function formatCurrency(amount) {
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }).format(amount);
+}
+
 // Default Strategies Template
 function getDefaultStrategies() {
     return [
@@ -99,7 +109,6 @@ function init() {
     renderDashboard();
     renderDashboard();
     initGreeting(); // Initialize Greeting
-    initPreMarketChecklist(); // Initialize Pre-Market Checklist
     initAICoach(); // Initialize AI Coach
     initTooltips(); // Initialize Tooltips
     initKeyboardShortcuts();
@@ -305,17 +314,72 @@ function switchTab(tabName) {
     document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
     document.getElementById(tabName).classList.add('active');
 
-    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    const desktopBtn = document.querySelector(`.tab-btn[data-tab="${tabName}"]`);
-    if (desktopBtn) desktopBtn.classList.add('active');
+    // Update Sidebar Links
+    document.querySelectorAll('.nav-link').forEach(link => link.classList.remove('active'));
+    const sidebarLink = document.querySelector(`.nav-link[data-tab="${tabName}"]`);
+    if (sidebarLink) sidebarLink.classList.add('active');
 
+    // Update Mobile Bottom Nav
     document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
     const mobileItem = document.querySelector(`.nav-item[data-tab="${tabName}"]`);
     if (mobileItem) mobileItem.classList.add('active');
 
+    // Close sidebar on mobile when clicking a link
+    if (window.innerWidth <= 768) {
+        document.querySelector('.app-sidebar').classList.remove('active');
+        document.querySelector('.sidebar-overlay').classList.remove('active');
+    }
+
+    // Hide Bottom Nav on AI Coach (Mobile optimization)
+    if (tabName === 'aicoach') {
+        document.body.classList.add('hide-bottom-nav');
+    } else {
+        document.body.classList.remove('hide-bottom-nav');
+    }
+
+    // Auto-update balance when switching to calculator
+    if (tabName === 'calculator') {
+        updateBalanceFromJournal();
+    }
+
+    // Initialize Backtest Module
+    if (tabName === 'backtest') {
+        initBacktestTab();
+    }
+
+    // Show selected tab
     if (tabName === 'analytics') {
         setTimeout(() => updateAnalytics(), 100);
     }
+}
+
+// Auto-update balance from journal
+function updateBalanceFromJournal() {
+    // Get initial balance from localStorage or use default
+    let initialBalance = parseFloat(localStorage.getItem('initialBalance'));
+
+    // If no initial balance set, use current balance input or default 10000
+    if (!initialBalance || isNaN(initialBalance)) {
+        const currentInput = parseFloat(document.getElementById('balance').value);
+        initialBalance = currentInput || 10000;
+        localStorage.setItem('initialBalance', initialBalance);
+    }
+
+    // Calculate total P&L from closed trades (excluding backtest)
+    const closedTrades = journalData.filter(t => !t.isBacktest && t.result !== 'PENDING');
+    const totalPnL = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+
+    // Current balance = initial + total P&L
+    const currentBalance = initialBalance + totalPnL;
+
+    // Update balance input
+    document.getElementById('balance').value = currentBalance.toFixed(2);
+
+    // Trigger calculation
+    calculate();
+
+    // Show feedback
+    showToast(`✅ Balance: $${currentBalance.toFixed(2)} (Initial: $${initialBalance.toFixed(2)} + P&L: $${totalPnL.toFixed(2)})`);
 }
 
 // Mode Switching
@@ -2289,7 +2353,30 @@ function populateStrategySelector() {
 
 // Chart Analysis Functions
 function openChartAnalysis() {
-    document.getElementById('chartImageInput').click();
+    // Show requirements modal first
+    const modal = document.getElementById('chartRequirementsModal');
+    if (modal) {
+        modal.style.display = 'flex';
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+}
+
+function closeChartRequirementsModal() {
+    const modal = document.getElementById('chartRequirementsModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+function proceedToUploadChart() {
+    // Close modal
+    closeChartRequirementsModal();
+
+    // Trigger file input
+    const fileInput = document.getElementById('chartImageInput');
+    if (fileInput) {
+        fileInput.click();
+    }
 }
 
 let currentChartImage = null;
@@ -2367,15 +2454,67 @@ async function analyzeChartWithAI() {
     const selectedStrategyId = strategySelector.value;
 
     // Build prompt
-    let prompt = 'Analisa chart trading berikut dan berikan rekomendasi setup trading.';
+    let prompt = `Kamu adalah AI Trading Coach profesional. Analisa chart trading berikut dengan TELITI.
+
+⚠️ ATURAN PENTING:
+1. BACA harga AKTUAL dari chart (lihat angka di axis kanan)
+2. BACA timeframe dari chart (H1, H4, D1, dll)
+3. BACA tanggal/waktu terakhir di chart
+4. JANGAN asumsikan harga - gunakan harga yang TERLIHAT di chart
+5. Berikan setup HIGH PROBABILITY untuk trader SIBUK (tidak bisa pantau market terus)
+
+🎯 KRITERIA SETUP HIGH PROBABILITY:
+1. **Konfirmasi Multiple Timeframe** - Setup harus valid di TF lebih tinggi juga
+2. **Clear Entry Trigger** - Entry pakai pending order (buy stop/sell stop)
+3. **Risk:Reward Minimal 1:2** - TP harus 2x lipat dari SL
+4. **Support/Resistance Kuat** - Gunakan level yang sudah teruji berkali-kali
+5. **Trend Following** - Prioritaskan setup searah trend utama
+
+📊 YANG HARUS KAMU LAKUKAN:
+1. Identifikasi harga CURRENT (candlestick terakhir)
+2. Identifikasi trend UTAMA (lihat TF lebih tinggi jika perlu)
+3. Tentukan support & resistance KUAT (yang sudah teruji)
+4. Berikan setup dengan PROBABILITAS TINGGI (bukan scalping)
+
+📈 FORMAT OUTPUT WAJIB:
+
+**ANALISA CHART:**
+• Pair: [baca dari chart]
+• Timeframe: [baca dari chart]
+• Harga Current: $[harga candlestick terakhir]
+• Trend Utama: [bullish/bearish/sideways]
+• Probabilitas Setup: [High/Medium/Low]
+
+**🟢 BUY SETUP (High Probability):**
+• Pending Order: Buy Stop di $[harga] jika [kondisi trigger]
+• SL: $[harga] (distance: [X] pips/points)
+• TP1: $[harga] (R:R = 1:[ratio])
+• TP2: $[harga] (R:R = 1:[ratio]) - opsional untuk maximize profit
+• Validitas: [berapa jam/hari setup ini valid]
+• Konfirmasi: [indikator/pattern apa yang harus terpenuhi]
+
+**🔴 SELL SETUP (High Probability):**
+• Pending Order: Sell Stop di $[harga] jika [kondisi trigger]
+• SL: $[harga] (distance: [X] pips/points)
+• TP1: $[harga] (R:R = 1:[ratio])
+• TP2: $[harga] (R:R = 1:[ratio]) - opsional
+• Validitas: [berapa jam/hari setup ini valid]
+• Konfirmasi: [indikator/pattern apa yang harus terpenuhi]
+
+⚠️ **PENTING:**
+• Setup ini untuk trader SIBUK - pakai pending order, set and forget
+• Jika dalam [X] jam kondisi tidak terpenuhi, CANCEL pending order
+• Jangan entry manual, tunggu harga trigger pending order otomatis
+
+💡 **DISCLAIMER:**
+Ini hanya insight analisis. Profit nikmati sendiri, rugi tanggung sendiri. 📊`;
 
     if (selectedStrategyId) {
         const strategy = strategies.find(s => s.id == selectedStrategyId);
         if (strategy) {
+            // Override dengan strategy-specific prompt
             prompt = buildStrategyAnalysisPrompt(strategy);
         }
-    } else {
-        prompt += '\n\nBerikan:\n1. Analisa trend & pattern\n2. Support/Resistance levels\n3. Entry point yang disarankan\n4. Stop Loss level\n5. Take Profit target\n6. Risk:Reward ratio\n\nJawab dalam Bahasa Indonesia, format Markdown.';
     }
 
     const chatInput = document.getElementById('chatInput');
@@ -2599,7 +2738,37 @@ async function askAI(prompt) {
                         messages: [
                             {
                                 role: 'system',
-                                content: 'Kamu adalah AI Trading Coach yang membantu trader menganalisa performa dan memberikan saran trading. Jawab dalam Bahasa Indonesia yang santai tapi profesional.'
+                                content: `Kamu adalah AI Trading Coach profesional yang membantu trader.
+
+ATURAN PENTING:
+1. Jawab dalam Bahasa Indonesia yang ringkas dan to-the-point
+2. Gunakan format markdown untuk struktur yang rapi:
+   - **Bold** untuk highlight penting
+   - Bullet points (•) untuk list
+   - Line breaks untuk spacing
+3. Jika user minta rekomendasi trading setup, gunakan format WAJIB ini:
+
+📈 **BUY SETUP:**
+• Entry: [harga] jika [kondisi terpenuhi]
+• SL: [harga]
+• TP: [harga]
+• Lot: [ukuran]
+
+📉 **SELL SETUP:**
+• Entry: [harga] jika [kondisi terpenuhi]
+• SL: [harga]
+• TP: [harga]
+• Lot: [ukuran]
+
+⚠️ **PENTING:**
+Tunggu konfirmasi kondisi. Jika tidak terpenuhi, JANGAN entry.
+
+💡 **DISCLAIMER:**
+Ini hanya insight analisis. Profit nikmati sendiri, rugi tanggung sendiri.
+
+4. Untuk pertanyaan analisis biasa, jawab maksimal 5-7 baris
+5. Hindari penjelasan panjang kecuali diminta detail
+6. Selalu akhiri dengan emoji yang relevan`
                             },
                             {
                                 role: 'user',
@@ -2692,21 +2861,31 @@ function addMessageToChat(sender, text, isLoading = false) {
             <div class="message-avatar">👤</div>
             <div class="message-content">
                 <strong>You</strong>
-                <p>${text}</p>
+                <p>${escapeHtml(text)}</p>
             </div>
         `;
     } else {
-        // Parse simple markdown (bold and list)
+        // Enhanced markdown parsing
         let formattedText = text
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\n- /g, '<br>• ')
-            .replace(/\n/g, '<br>');
+            // Bold text
+            .replace(/\*\*(.*?)\*\*/g, '<strong style="color: var(--accent-primary);">$1</strong>')
+            // Bullet points with proper spacing
+            .replace(/\n• /g, '<br><span style="display: inline-block; margin-left: 0.5rem;">• ')
+            .replace(/\n- /g, '<br><span style="display: inline-block; margin-left: 0.5rem;">• ')
+            // Close span tags
+            .replace(/• (.*?)(<br>|$)/g, '• $1</span>$2')
+            // Double line breaks for paragraphs
+            .replace(/\n\n/g, '</p><p style="margin-top: 0.75rem;">')
+            // Single line breaks
+            .replace(/\n/g, '<br>')
+            // Emoji spacing
+            .replace(/(📈|📉|⚠️|💡|✅|❌|🎯)/g, '<span style="margin-right: 0.25rem;">$1</span>');
 
         div.innerHTML = `
             <div class="message-avatar">🤖</div>
-            <div class="message-content">
+            <div class="message-content ai-response">
                 <strong>${isLoading ? 'AI Coach (typing...)' : 'AI Coach'}</strong>
-                <p>${formattedText}</p>
+                <p style="line-height: 1.6; margin-top: 0.5rem;">${formattedText}</p>
             </div>
         `;
     }
@@ -2715,6 +2894,13 @@ function addMessageToChat(sender, text, isLoading = false) {
     container.scrollTop = container.scrollHeight;
     if (typeof lucide !== 'undefined') lucide.createIcons();
     return id;
+}
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 function buildTradingContext() {
@@ -3110,101 +3296,1059 @@ window.addEventListener('resize', () => {
     if (streakChart) streakChart.resize();
 });
 
-// ========== PRE-MARKET CHECKLIST FUNCTIONS ==========
 
-let preMarketItems = [
-    { id: 'news', text: 'Check Economic Calendar (News)', checked: false },
-    { id: 'plan', text: 'Review Trading Plan', checked: false },
-    { id: 'mindset', text: 'Mindset Check (Am I calm?)', checked: false }
-];
 
-function initPreMarketChecklist() {
-    renderPreMarketChecklist();
+// ===== BACKTEST MODE FUNCTIONS =====
+
+let currentBacktestMode = 'forex';
+let bulkModeActive = false;
+
+// Initialize Backtest Tab
+function initBacktestTab() {
+    // Load backtest settings
+    loadBacktestSettings();
+
+    // Set default date to today
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    document.getElementById('bt-date').value = now.toISOString().slice(0, 16);
+
+    // Populate strategy dropdowns
+    updateBacktestStrategyDropdown();
+
+    // Populate strategy performance dropdown
+    const selectedStrategyDropdown = document.getElementById('bt-selected-strategy');
+    if (selectedStrategyDropdown) {
+        selectedStrategyDropdown.innerHTML = '<option value="all">All Strategies</option>';
+        strategies.forEach(s => {
+            selectedStrategyDropdown.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+        });
+    }
+
+    // Render initial data
+    updateStrategyPerformance();
+    renderBacktestTrades();
+    populateBacktestFilters(); // New Global Populate
+    forcePopulateStrategyDropdown();
 }
 
-function openPreMarketModal() {
-    document.getElementById('preMarketModal').style.display = 'block';
-    renderPreMarketChecklist();
+
+
+// Switch Backtest Mode (Forex/Crypto)
+function switchBacktestMode(mode, element) {
+    currentBacktestMode = mode;
+
+    // Update button states
+    document.querySelectorAll('#backtest .mode-btn').forEach(btn => btn.classList.remove('active'));
+    if (element) element.classList.add('active');
+
+    // Show/hide leverage field
+    const leverageGroup = document.getElementById('bt-leverage-group');
+    if (leverageGroup) {
+        leverageGroup.style.display = mode === 'crypto' ? 'block' : 'none';
+    }
 }
 
-function closePreMarketModal() {
-    document.getElementById('preMarketModal').style.display = 'none';
+// Calculate R:R Ratio
+function calculateBacktestRR() {
+    const entry = parseFloat(document.getElementById('bt-entry').value) || 0;
+    const sl = parseFloat(document.getElementById('bt-sl').value) || 0;
+    const tp = parseFloat(document.getElementById('bt-tp').value) || 0;
+
+    if (entry > 0 && sl > 0 && tp > 0 && entry !== sl) {
+        const risk = Math.abs(entry - sl);
+        const reward = Math.abs(tp - entry);
+        const rr = (reward / risk).toFixed(2);
+        document.getElementById('bt-rr').value = `1:${rr}`;
+    } else {
+        document.getElementById('bt-rr').value = '';
+    }
 }
 
-function renderPreMarketChecklist() {
-    const container = document.getElementById('preMarketChecklistContainer');
-    if (!container) return;
-    container.innerHTML = '';
+// Select Emotion
+function selectEmotion(emotion, element) {
+    // Update button states
+    document.querySelectorAll('.emotion-btn').forEach(btn => btn.classList.remove('active'));
+    element.classList.add('active');
 
-    preMarketItems.forEach((item, index) => {
-        const div = document.createElement('div');
-        div.className = `checklist-item-row ${item.checked ? 'checked' : ''}`;
-        div.onclick = (e) => {
-            if (e.target.type !== 'checkbox') {
-                toggleChecklistItem(index);
-            }
-        };
+    // Update hidden input
+    document.getElementById('bt-emotion').value = emotion;
+}
 
-        div.innerHTML = `
-            <input type="checkbox" class="checklist-chk" ${item.checked ? 'checked' : ''} onchange="toggleChecklistItem(${index})">
-            <span style="flex: 1;">${item.text}</span>
-            ${index > 2 ? `<button class="btn-icon" onclick="removeChecklistItem(${index}, event)"><i data-lucide="trash-2" style="width:14px; height:14px; color:var(--text-muted);"></i></button>` : ''}
-        `;
-        container.appendChild(div);
+// Save Backtest Trade
+function saveBacktestTrade() {
+    const asset = document.getElementById('bt-asset').value.trim();
+    const entry = parseFloat(document.getElementById('bt-entry').value);
+    const sl = parseFloat(document.getElementById('bt-sl').value);
+    const tp = parseFloat(document.getElementById('bt-tp').value) || 0;
+    const result = document.getElementById('bt-result').value;
+    const emotion = document.getElementById('bt-emotion').value || 'neutral';
+    const notes = document.getElementById('bt-notes').value.trim();
+    const tradeDate = document.getElementById('bt-date').value;
+    const leverage = parseInt(document.getElementById('bt-leverage').value) || 1;
+
+    // Get strategyId from Strategy Performance dropdown
+    const selectedStrategyId = document.getElementById('bt-selected-strategy').value;
+    const strategyId = (selectedStrategyId && selectedStrategyId !== 'all') ? parseInt(selectedStrategyId) : 0;
+
+    // Get backtest settings
+    const btSettings = JSON.parse(localStorage.getItem('backtestSettings') || '{}');
+    const balance = btSettings.balance || 0;
+    const riskPercent = btSettings.riskPercent || 0;
+    const rrTarget = btSettings.rrTarget || 0;
+
+    // Validation
+    if (!balance || !riskPercent || !rrTarget) {
+        showToast('⚠️ Isi Backtest Settings terlebih dahulu (Saldo, Risk %, R:R Target)!');
+        return;
+    }
+    if (!asset) {
+        showToast('⚠️ Asset/Pair harus diisi!');
+        return;
+    }
+    if (!entry || !sl) {
+        showToast('⚠️ Entry dan SL harus diisi!');
+        return;
+    }
+    if (entry === sl) {
+        showToast('⚠️ Entry dan SL tidak boleh sama!');
+        return;
+    }
+    if (!tradeDate) {
+        showToast('⚠️ Trade Date harus diisi!');
+        return;
+    }
+
+    // Auto-detect Mode from Asset
+    const mode = asset.toUpperCase().includes('BTC') || asset.toUpperCase().includes('ETH') ||
+        asset.toUpperCase().includes('USDT') ? 'CRYPTO' : 'FOREX';
+
+    // Auto-detect Direction from Entry vs SL
+    const direction = sl < entry ? 'LONG' : 'SHORT';
+
+    // Auto-calculate P&L based on Result
+    const riskAmount = balance * (riskPercent / 100);
+    let pnl = 0;
+
+    if (result === 'TP HIT' || result === 'WIN') {
+        // WIN: Risk Amount × R:R Target
+        pnl = riskAmount * rrTarget;
+    } else if (result === 'SL HIT' || result === 'LOSS') {
+        // LOSS: -Risk Amount
+        pnl = -riskAmount;
+    } else if (result === 'BREAKEVEN') {
+        pnl = 0;
+    }
+
+    // Calculate R:R (if TP provided)
+    const risk = Math.abs(entry - sl);
+    const reward = tp > 0 ? Math.abs(tp - entry) : 0;
+    const rrRatio = tp > 0 ? (reward / risk).toFixed(2) : rrTarget.toFixed(2);
+
+    // Remember last strategy for next entry
+    if (strategyId) {
+        localStorage.setItem('lastBacktestStrategy', strategyId.toString());
+    }
+
+    // Get strategy (optional)
+    const strategy = strategyId ? strategies.find(s => s.id === strategyId) : null;
+
+    // Create trade object
+    const trade = {
+        id: Date.now(),
+        date: tradeDate,
+        mode: mode,
+        asset: asset.toUpperCase(),
+        entry: entry,
+        sl: sl,
+        tp: tp,
+        direction: direction,
+        result: result,
+        pnl: pnl,
+        strategyId: strategyId,
+        strategyName: strategy ? strategy.name : '',
+        emotion: emotion,
+        notes: notes,
+        rrRatio: rrRatio,
+        isBacktest: true, // CRITICAL: Mark as backtest
+        leverage: mode === 'CRYPTO' ? leverage : null
+    };
+
+    // Add to journal
+    journalData.push(trade);
+    localStorage.setItem('tradingJournal', JSON.stringify(journalData));
+
+    // Success feedback
+    showToast('✅ Backtest trade added successfully!');
+
+    // Update UI
+    updateStrategyPerformance();
+    renderBacktestTrades();
+    clearBacktestForm();
+
+    // Scroll to top to see the new trade
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    updateStrategyFilter(); // Update journal filters
+}
+
+// Save Backtest Settings to localStorage
+// ==========================================
+// NEW BACKTEST MODULE (Session Based)
+// ==========================================
+
+let backtestSession = {
+    balance: 1000,
+    riskPercent: 1,
+    rr: 2,
+    asset: 'EURUSD',
+    strategyId: '',
+    style: 'Intraday',
+    // We strictly use this session ID logic to persist settings
+    // But data is now in `backtestData` global array
+};
+
+let backtestData = JSON.parse(localStorage.getItem('backtestData')) || [];
+
+// FORCE POPULATE STRATEGY DROPDOWN (Direct & Clean)
+function forcePopulateStrategyDropdown() {
+    const select = document.getElementById('bt-strategy');
+    if (!select) return;
+
+    // Use global strategies variable directly
+    const currentStrategies = strategies || [];
+
+    select.innerHTML = '<option value="">-- Select Strategy --</option>';
+
+    if (currentStrategies.length === 0) {
+        select.innerHTML += '<option disabled>No strategies found</option>';
+    } else {
+        currentStrategies.forEach(s => {
+            select.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+        });
+    }
+
+    // Restore selection
+    if (backtestSession && backtestSession.strategyId) {
+        select.value = backtestSession.strategyId;
+    }
+}
+
+// Initialize Backtest Tab
+function initBacktestTab() {
+    loadBacktestSession();
+    forcePopulateStrategyDropdown(); // <--- NEW CALL
+
+
+    // Bind Filter Events
+    ['bt-filter-method', 'bt-filter-asset', 'bt-filter-style', 'bt-filter-result'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', renderBacktestDashboard);
     });
 
-    // We don't call createIcons here to avoid flashing, but if needed we can
-    // lucide.createIcons();
-    const TrashIcons = container.querySelectorAll('.btn-icon i');
-    if (TrashIcons.length > 0) lucide.createIcons();
+    renderBacktestDashboard(); // This will trigger chart and trade list updates too
+    renderBacktestChart();
+    renderBacktestTrades(); // Add trade list rendering
 
-    updateStartButtonState();
+
+    // Populate Filters
+    populateBacktestFilters();
 }
 
-function toggleChecklistItem(index) {
-    preMarketItems[index].checked = !preMarketItems[index].checked;
-    renderPreMarketChecklist();
-}
+// Populate Filter Dropdowns dynamically
+function populateBacktestFilters() {
+    // 2. Strategy Filter Dropdown (Filter Bar)
+    const methodFilter = document.getElementById('bt-filter-method');
+    if (methodFilter) {
+        const existingMethod = methodFilter.value;
+        methodFilter.innerHTML = '<option value="all">All Strategies</option>';
+        strategies.forEach(s => {
+            methodFilter.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+        });
+        methodFilter.value = existingMethod;
+    }
 
-function addCustomChecklistItem() {
-    const input = document.getElementById('newChecklistItem');
-    const text = input.value.trim();
-    if (text) {
-        preMarketItems.push({ id: `custom-${Date.now()}`, text: text, checked: false });
-        input.value = '';
-        renderPreMarketChecklist();
+    // 3. Asset Filter Dropdown
+    const assetFilter = document.getElementById('bt-filter-asset');
+    if (assetFilter) {
+        const existingAsset = assetFilter.value;
+        const assets = [...new Set(backtestData.map(t => t.asset))];
+        assetFilter.innerHTML = '<option value="all">All Pairs</option>';
+        if (assets.length > 0) {
+            assets.sort().forEach(a => {
+                assetFilter.innerHTML += `<option value="${a}">${a}</option>`;
+            });
+        }
+        assetFilter.value = existingAsset;
     }
 }
 
-function removeChecklistItem(index, event) {
-    event.stopPropagation(); // Prevent toggling
-    preMarketItems.splice(index, 1);
-    renderPreMarketChecklist();
+// Get Filtered Data
+function getFilteredBacktestData() {
+    let filtered = [...backtestData];
+
+    const methodEl = document.getElementById('bt-filter-method');
+    const assetEl = document.getElementById('bt-filter-asset');
+    const styleEl = document.getElementById('bt-filter-style');
+    const resultEl = document.getElementById('bt-filter-result');
+
+    const method = methodEl ? methodEl.value : 'all';
+    const asset = assetEl ? assetEl.value : 'all';
+    const style = styleEl ? styleEl.value : 'all';
+    const result = resultEl ? resultEl.value : 'all';
+
+    if (method !== 'all') filtered = filtered.filter(t => t.strategyId == method);
+    if (asset !== 'all') filtered = filtered.filter(t => t.asset === asset);
+
+    // Patch: filter by style property if exists, else notes
+    if (style !== 'all') filtered = filtered.filter(t => (t.style === style) || (t.notes && t.notes.includes(style)));
+
+    if (result !== 'all') {
+        if (result === 'WIN') filtered = filtered.filter(t => t.pnl > 0);
+        if (result === 'LOSS') filtered = filtered.filter(t => t.pnl < 0);
+        if (result === 'BREAKEVEN') filtered = filtered.filter(t => t.pnl === 0);
+    }
+
+    return filtered.sort((a, b) => new Date(a.date) - new Date(b.date));
 }
 
-function updateStartButtonState() {
-    const allChecked = preMarketItems.every(i => i.checked);
-    const btn = document.getElementById('startSessionBtn');
-    if (btn) btn.disabled = !allChecked;
-}
+// Load Session from LocalStorage
+// Load Session from LocalStorage
+function loadBacktestSession() {
+    const saved = localStorage.getItem('backtestSession');
+    if (saved) {
+        backtestSession = JSON.parse(saved);
 
-function completePreMarketRoutine() {
-    // Award Bonus
-    const todayStr = new Date().toISOString().split('T')[0];
-    const lastRoutineDate = localStorage.getItem('lastPreMarketRoutineDate');
-
-    if (lastRoutineDate !== todayStr) {
-        // Award points
-        localStorage.setItem('lastPreMarketRoutineDate', todayStr);
-        localStorage.setItem('preMarketBonus', 'true');
-
-        showToast('✅ Session Started! +5 Discipline Points');
-
-        // Trigger dashboard update to reflect score
-        renderDashboard();
+        // Restore Inputs
+        document.getElementById('bt-balance').value = backtestSession.balance;
+        document.getElementById('bt-risk').value = backtestSession.riskPercent;
+        document.getElementById('bt-rr').value = backtestSession.rr;
+        document.getElementById('bt-asset').value = backtestSession.asset;
+        document.getElementById('bt-style').value = backtestSession.style || 'Intraday';
     } else {
-        showToast('ℹ️ Session Started');
+        updateBacktestSession();
+    }
+    loadBacktestPresetsDropdown(); // Init presets
+}
+
+// Update Session Data on Input Change
+// PRESETS LOGIC
+let backtestPresets = JSON.parse(localStorage.getItem('backtestPresets')) || [];
+
+function loadBacktestPresetsDropdown() {
+    const select = document.getElementById('bt-preset-load');
+    if (!select) return;
+
+    backtestPresets = JSON.parse(localStorage.getItem('backtestPresets')) || [];
+
+    // Keep first default option
+    select.innerHTML = '<option value="">-- Start Fresh / Select Preset --</option>';
+
+    backtestPresets.forEach((preset, index) => {
+        const option = document.createElement('option');
+        option.value = index; // Use index as ID for simplicity
+        option.textContent = `📂 ${preset.name}`;
+        select.appendChild(option);
+    });
+}
+
+function loadBacktestPreset(index) {
+    if (index === "") return;
+
+    const preset = backtestPresets[parseInt(index)];
+    if (preset) {
+        document.getElementById('bt-balance').value = preset.balance;
+        document.getElementById('bt-risk').value = preset.riskPercent;
+        document.getElementById('bt-rr').value = preset.rr;
+        document.getElementById('bt-asset').value = preset.asset;
+        document.getElementById('bt-strategy').value = preset.strategyId;
+        document.getElementById('bt-style').value = preset.style;
+        document.getElementById('bt-preset-name').value = preset.name; // Show loaded name
+
+        // Trigger update to save to session and refresh HUD
+        updateBacktestSession();
+        showToast(`✅ Loaded Preset: ${preset.name}`);
+    }
+}
+
+// Update Session Data on Input Change
+function updateBacktestSession() {
+    backtestSession.balance = parseFloat(document.getElementById('bt-balance').value) || 1000;
+    backtestSession.riskPercent = parseFloat(document.getElementById('bt-risk').value) || 1;
+    backtestSession.rr = parseFloat(document.getElementById('bt-rr').value) || 2;
+    backtestSession.asset = document.getElementById('bt-asset').value || 'EURUSD';
+    backtestSession.strategyId = document.getElementById('bt-strategy').value;
+    backtestSession.style = document.getElementById('bt-style').value;
+
+    localStorage.setItem('backtestSession', JSON.stringify(backtestSession));
+
+    // Update HUD Info
+    const stratName = strategies.find(s => s.id == backtestSession.strategyId)?.name || 'Processing...';
+
+    // Update New HUD Display
+    const assetDisplay = document.getElementById('hud-asset-display');
+    const stratDisplay = document.getElementById('hud-strategy-display');
+    const riskDisplay = document.getElementById('hud-risk-display');
+    const statusIcon = document.getElementById('bt-settings-status-icon');
+
+    if (assetDisplay) assetDisplay.textContent = backtestSession.asset.toUpperCase();
+    // Show Strategy name in large text, style is secondary
+    if (stratDisplay) stratDisplay.textContent = stratName + ` (${backtestSession.style})`;
+    if (riskDisplay) riskDisplay.textContent = `Risk ${backtestSession.riskPercent}%`;
+
+    // Visual feedback
+    if (statusIcon) {
+        statusIcon.style.color = 'var(--success)';
+        // Reset after 2s
+        setTimeout(() => statusIcon.style.color = 'var(--text-muted)', 2000);
     }
 
-    closePreMarketModal();
+    renderBacktestDashboard();
+    if (window.lucide) lucide.createIcons();
 }
+
+function saveBacktestSettings() {
+    // Check if saving as preset
+    const presetName = document.getElementById('bt-preset-name').value.trim();
+
+    if (presetName) {
+        let backtestPresets = JSON.parse(localStorage.getItem('backtestPresets')) || [];
+
+        // Save as Preset
+        const newPreset = {
+            name: presetName,
+            balance: parseFloat(document.getElementById('bt-balance').value) || 1000,
+            riskPercent: parseFloat(document.getElementById('bt-risk').value) || 1,
+            rr: parseFloat(document.getElementById('bt-rr').value) || 2,
+            asset: document.getElementById('bt-asset').value || 'EURUSD',
+            strategyId: document.getElementById('bt-strategy').value,
+            style: document.getElementById('bt-style').value
+        };
+
+        // Check if exists update, else push
+        const existingIndex = backtestPresets.findIndex(p => p.name === presetName);
+        if (existingIndex >= 0) {
+            backtestPresets[existingIndex] = newPreset;
+            showToast(`🔄 Preset "${presetName}" Updated!`);
+        } else {
+            backtestPresets.push(newPreset);
+            showToast(`💾 Preset "${presetName}" Created!`);
+        }
+
+        localStorage.setItem('backtestPresets', JSON.stringify(backtestPresets));
+        loadBacktestPresetsDropdown(); // Refresh dropdown
+    } else {
+        showToast('✅ Session Configuration Applied!');
+    }
+
+    updateBacktestSession();
+    toggleBacktestSettings(); // Close panel
+}
+
+// Toggle Settings Panel
+function toggleBacktestSettings() {
+    const panel = document.getElementById('backtestSettingsPanel');
+    const icon = document.getElementById('bt-settings-toggle-icon');
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+        icon.style.transform = 'rotate(180deg)';
+    } else {
+        panel.style.display = 'none';
+        icon.style.transform = 'rotate(0deg)';
+    }
+}
+
+// Advanced Options Toggle
+function toggleAdvancedBacktest() {
+    const adv = document.getElementById('bt-advanced-inputs');
+    const btn = document.getElementById('bt-advanced-toggle');
+    if (adv.style.display === 'none') {
+        adv.style.display = 'grid';
+        btn.textContent = 'Hide Advanced Options';
+    } else {
+        adv.style.display = 'none';
+        btn.textContent = 'Show Advanced Options (Price)';
+    }
+}
+
+// QUICK BACKTEST ACTION (The Core Logic)
+function quickBacktest(type) {
+    try {
+        if (!backtestSession.strategyId) {
+            showToast('⚠️ Please select a strategy first!');
+            toggleBacktestSettings(); // Open settings to show user
+            return;
+        }
+
+        console.log("🚀 Executing QuickBacktest:", type);
+
+        // 1. Calculate Risk Amount (Compounding based on Filtered Equity)
+        // This allows simulating "What if I only traded this strategy?"
+        const filteredHistory = getFilteredBacktestData();
+        const currentPnL = filteredHistory.reduce((sum, t) => sum + t.pnl, 0);
+        const currentEquity = backtestSession.balance + currentPnL;
+
+        const riskAmount = currentEquity * (backtestSession.riskPercent / 100);
+
+        // 2. Determine P&L
+        let pnl = 0;
+        let resultStatus = 'PENDING';
+
+        if (type === 'WIN') {
+            pnl = riskAmount * backtestSession.rr;
+            resultStatus = 'TP HIT';
+        } else if (type === 'LOSS') {
+            pnl = -riskAmount;
+            resultStatus = 'SL HIT';
+        } else if (type === 'BE') {
+            pnl = 0;
+            resultStatus = 'BREAKEVEN';
+        }
+
+        // 3. Handle Manual Price Inputs (Optional Override)
+        const entryPrice = document.getElementById('bt-manual-entry').value;
+        const slPrice = document.getElementById('bt-manual-sl').value;
+        const tpPrice = document.getElementById('bt-manual-tp').value;
+
+        // 4. Create Trade Object
+        const trade = {
+            id: Date.now(),
+            date: new Date().toISOString(),
+            isBacktest: true, // Flag to separate from real journal
+            mode: 'backtest',
+            asset: backtestSession.asset,
+            strategyId: parseInt(backtestSession.strategyId),
+            strategyName: strategies.find(s => s.id == backtestSession.strategyId)?.name || 'Unknown',
+            risk: riskAmount.toFixed(2),
+            rrRatio: backtestSession.rr,
+            result: resultStatus,
+            pnl: pnl,
+            equityAfter: currentEquity + pnl, // Snapshot of equity
+            style: backtestSession.style, // Explicitly save style for filtering
+
+            // Optional Log
+            entry: entryPrice || '-',
+            sl: slPrice || '-',
+            tp: tpPrice || '-',
+            notes: `Quick ${type} (${backtestSession.style})`,
+            emotion: 'neutral'
+        };
+
+        // 5. Save To BACKTEST DATA (Separated)
+        backtestData.push(trade);
+        localStorage.setItem('backtestData', JSON.stringify(backtestData));
+
+        // 6. Update UI
+        showToast(`✅ Trade Added: ${type} ($${pnl.toFixed(2)})`);
+        populateBacktestFilters();
+        renderBacktestDashboard();
+
+    } catch (e) {
+        console.error("CRITICAL BACKTEST ERROR:", e);
+        alert("CRITICAL ERROR: " + e.message);
+    }
+}
+
+// Reset Session
+// Reset Session (Clears ALL backtest data)
+function resetBacktestSession() {
+    if (!confirm("⚠️ ARE YOU SURE? This will DELETE ALL backtest data history!")) return;
+
+    backtestData = [];
+    localStorage.setItem('backtestData', JSON.stringify(backtestData));
+
+    renderBacktestDashboard();
+}
+
+// Render Dashboard Stats (Balance, Winrate, etc.)
+function renderBacktestDashboard() {
+    const filteredTrades = getFilteredBacktestData();
+
+    // 1. Calculate PnL
+    const totalPnL = filteredTrades.reduce((sum, t) => sum + t.pnl, 0);
+    const currentEquity = backtestSession.balance + totalPnL; // Base balance + PnL
+
+    // 2. Growth Percentage
+    const growthPercent = backtestSession.balance > 0 ? ((currentEquity - backtestSession.balance) / backtestSession.balance) * 100 : 0;
+
+    // 3. Calculate Winrate
+    const wins = filteredTrades.filter(t => t.pnl > 0).length;
+    const total = filteredTrades.length;
+    const winrate = total > 0 ? ((wins / total) * 100).toFixed(1) : 0;
+
+    // 4. Calculate Streaks
+    let maxWinStreak = 0;
+    let maxLoseStreak = 0;
+    let currentWinStreak = 0;
+    let currentLoseStreak = 0;
+
+    filteredTrades.forEach(t => {
+        if (t.pnl > 0) {
+            currentWinStreak++;
+            currentLoseStreak = 0;
+            maxWinStreak = Math.max(maxWinStreak, currentWinStreak);
+        } else if (t.pnl < 0) {
+            currentLoseStreak++;
+            currentWinStreak = 0;
+            maxLoseStreak = Math.max(maxLoseStreak, currentLoseStreak);
+        }
+        else {
+            currentWinStreak = 0;
+            currentLoseStreak = 0;
+        }
+    });
+
+    // Update DOM
+    document.getElementById('bt-current-balance').textContent = formatCurrency(currentEquity);
+
+    const growthEl = document.getElementById('bt-session-growth');
+    if (growthEl) {
+        growthEl.textContent = `(${growthPercent >= 0 ? '+' : ''}${growthPercent.toFixed(1)}%)`;
+        growthEl.style.color = growthPercent >= 0 ? 'var(--success)' : 'var(--danger)';
+    }
+
+    document.getElementById('bt-session-pnl').textContent = formatCurrency(totalPnL);
+    document.getElementById('bt-session-pnl').style.color = totalPnL >= 0 ? 'var(--success)' : 'var(--danger)';
+
+    document.getElementById('bt-session-winrate').textContent = `${winrate}% (${wins}/${total})`;
+
+    const maxWinEl = document.getElementById('bt-max-winstreak');
+    const maxLoseEl = document.getElementById('bt-max-losestreak');
+    if (maxWinEl) maxWinEl.textContent = maxWinStreak;
+    if (maxLoseEl) maxLoseEl.textContent = maxLoseStreak;
+
+    // Total Trades count
+    const totalTradesEl = document.getElementById('bt-total-trades');
+    if (totalTradesEl) totalTradesEl.textContent = total;
+
+    // Render Charts & List
+    renderBacktestChart(filteredTrades);
+    renderBacktestPieChart(filteredTrades);
+    renderBacktestTrades(filteredTrades);
+}
+
+// Render Equity Chart (Cumulative PnL)
+let backtestChartInstance = null;
+function renderBacktestChart(trades) {
+    const ctx = document.getElementById('backtestEquityChart').getContext('2d');
+
+    // Prepare Arrays for Categorical Axis
+    const labels = ['Start'];
+    const dataValues = [0];
+
+    let runningPnL = 0;
+    const sessionTrades = trades || getFilteredBacktestData(); // Fallback if called directly
+
+    sessionTrades.forEach((t, index) => {
+        runningPnL += t.pnl;
+        labels.push(`#${index + 1}`);
+        dataValues.push(runningPnL);
+    });
+
+    if (backtestChartInstance) {
+        backtestChartInstance.destroy();
+    }
+
+    backtestChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels, // Explicit X-Axis Labels (0, 1, 2...)
+            datasets: [{
+                label: 'Cumulative PnL',
+                data: dataValues, // Y-Axis Values
+                borderColor: '#00D68F',
+                backgroundColor: 'rgba(0, 214, 143, 0.1)',
+                borderWidth: 2,
+                fill: false, // Pure line chart (no area fill)
+                tension: 0.1,
+                pointRadius: 3,
+                pointHoverRadius: 5
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                intersect: false,
+                mode: 'index',
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function (context) {
+                            return 'PnL: ' + formatCurrency(context.raw);
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    display: true,
+                    title: { display: true, text: 'Trade Sequence' },
+                    grid: { display: false }
+                },
+                y: {
+                    grid: { color: 'rgba(255,255,255,0.05)' },
+                    ticks: {
+                        callback: function (value) {
+                            return '$' + value;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+// Render Pie Chart
+let backtestPieInstance = null;
+function renderBacktestPieChart(trades) {
+    const canvas = document.getElementById('backtestPieChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const wins = trades.filter(t => t.pnl > 0).length;
+    const losses = trades.filter(t => t.pnl < 0).length;
+    const be = trades.length - wins - losses;
+
+    if (backtestPieInstance) backtestPieInstance.destroy();
+
+    backtestPieInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: ['Win', 'Loss', 'BE'],
+            datasets: [{
+                data: [wins, losses, be],
+                backgroundColor: ['#10b981', '#ef4444', '#64748b'], // Success, Danger, Muted
+                borderWidth: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'bottom', labels: { color: '#94a3b8' } }
+            },
+            cutout: '70%'
+        }
+    });
+}
+
+// Render Trade List
+function renderBacktestTrades(trades) {
+    const list = document.getElementById('backtestTradeList');
+    if (!list) return;
+
+    // Use passed trades OR filter
+    let displayTrades = (trades || getFilteredBacktestData()).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Fallback: If filtered is empty but global data exists
+    if (displayTrades.length === 0) {
+        if (backtestData.length > 0) {
+            list.innerHTML = `<div style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                <p>No trades match current filters.</p>
+                <button class="btn btn-sm btn-secondary" onclick="document.getElementById('bt-filter-method').value='all';document.getElementById('bt-filter-asset').value='all';document.getElementById('bt-filter-style').value='all';document.getElementById('bt-filter-result').value='all';renderBacktestDashboard();">Clear Filters</button>
+             </div>`;
+        } else {
+            list.innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--text-muted);">No backtest trades yet. Start by clicking WIN/LOSS above!</div>';
+        }
+        return;
+    }
+
+    list.innerHTML = displayTrades.map((t, index) => {
+        const isWin = t.pnl > 0;
+        const color = isWin ? 'var(--success)' : (t.pnl < 0 ? 'var(--danger)' : 'var(--warning)');
+        const icon = isWin ? '📈' : (t.pnl < 0 ? '📉' : '⚖️');
+
+        return `
+        <div class="trade-card minimalist" style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; border-bottom: 1px solid var(--border);">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <div style="font-size: 1.25rem;">${icon}</div>
+                <div>
+                    <div style="font-weight: 600;">${t.result} <span style="font-size: 0.8rem; opacity: 0.7;">#${displayTrades.length - index}</span></div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted);">${t.asset} | ${t.strategyName || 'No Strat'} | ${t.style || 'Intraday'}</div>
+                </div>
+            </div>
+            <div style="text-align: right;">
+                <div style="font-weight: 700; color: ${color};">${formatCurrency(t.pnl)}</div>
+                <div style="font-size: 0.8rem; color: var(--text-muted);">Risk: $${t.risk}</div>
+            </div>
+             <button class="btn-icon-only" onclick="deleteBacktestTrade(${t.id})" style="margin-left: 1rem; color: var(--text-muted);">
+                <i data-lucide="x"></i>
+            </button>
+        </div>
+        `;
+    }).join('');
+
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+// Delete Backtest Trade
+function deleteBacktestTrade(id) {
+    if (!confirm('Delete this backtest trade?')) return;
+
+    backtestData = backtestData.filter(t => t.id !== id);
+    localStorage.setItem('backtestData', JSON.stringify(backtestData));
+
+    showToast('Backtest trade deleted');
+    renderBacktestDashboard(); // Refresh all
+}
+
+// Toggle Bulk Mode (Future Enhancement)
+function toggleBulkMode() {
+    bulkModeActive = !bulkModeActive;
+    const btn = document.getElementById('bulkModeBtn');
+    const container = document.getElementById('backtestFormContainer');
+
+    if (bulkModeActive) {
+        btn.innerHTML = '<i data-lucide="layers"></i> Single Mode';
+        container.classList.add('bulk-mode-active');
+        showToast('💡 Bulk mode coming soon! For now, use "Add Trade" multiple times.');
+    } else {
+        btn.innerHTML = '<i data-lucide="layers"></i> Bulk Mode';
+        container.classList.remove('bulk-mode-active');
+    }
+
+    if (typeof lucide !== 'undefined') {
+        lucide.createIcons();
+    }
+}
+
+// Update init() to include backtest initialization
+const originalInit = init;
+init = function () {
+    originalInit();
+    initBacktestTab();
+    initPWA();
+};
+
+// ===== MOBILE UI HELPERS =====
+
+// Exit AI Coach (for mobile back button)
+function exitAICoach() {
+    switchTab('dashboard');
+}
+
+// ===== PWA SETUP =====
+
+let deferredPrompt;
+
+function initPWA() {
+    // Register Service Worker
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js')
+                .then(registration => {
+                    console.log('✅ Service Worker registered:', registration.scope);
+                })
+                .catch(error => {
+                    console.log('❌ Service Worker registration failed:', error);
+                });
+        });
+    }
+
+    // Handle install prompt
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+
+        // Show the sidebar button
+        const installBtn = document.getElementById('installAppBtn');
+        if (installBtn) installBtn.style.display = 'block';
+
+        showInstallPrompt();
+    });
+
+    // Handle successful install
+    window.addEventListener('appinstalled', () => {
+        console.log('✅ PWA installed successfully!');
+        deferredPrompt = null;
+
+        // Hide sidebar button
+        const installBtn = document.getElementById('installAppBtn');
+        if (installBtn) installBtn.style.display = 'none';
+
+        showToast('✅ App installed! You can now use it offline.');
+    });
+}
+
+// Triggered by the sidebar button
+async function installPWA() {
+    if (!deferredPrompt) return;
+
+    deferredPrompt.prompt();
+
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log(`User response to the install prompt: ${outcome}`);
+
+    deferredPrompt = null;
+
+    // Hide button if installed
+    if (outcome === 'accepted') {
+        const installBtn = document.getElementById('installAppBtn');
+        if (installBtn) installBtn.style.display = 'none';
+    }
+}
+
+// Show install prompt (optional - can be triggered by button)
+function showInstallPrompt() {
+    // Auto-show install prompt after 30 seconds on first visit
+    const hasSeenPrompt = localStorage.getItem('pwaPromptShown');
+
+    if (!hasSeenPrompt) {
+        setTimeout(() => {
+            if (deferredPrompt && confirm('Install Trading Manager Pro as an app for offline access?')) {
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then((choiceResult) => {
+                    if (choiceResult.outcome === 'accepted') {
+                        console.log('User accepted install');
+                    }
+                    deferredPrompt = null;
+                });
+            }
+            localStorage.setItem('pwaPromptShown', 'true');
+        }, 30000); // Show after 30 seconds
+    }
+}
+
+// Manual install trigger (can be called from settings)
+function installPWA() {
+    if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choiceResult) => {
+            if (choiceResult.outcome === 'accepted') {
+                showToast('✅ Installing app...');
+            }
+            deferredPrompt = null;
+        });
+    } else {
+        showToast('ℹ️ App is already installed or not available for install');
+    }
+}
+
+// ===== PRE-MARKET ROUTINE =====
+
+function openPreMarketRoutine() {
+    document.getElementById('preMarketModal').classList.add('active');
+    loadRoutineProgress();
+}
+
+function closePreMarketRoutine() {
+    document.getElementById('preMarketModal').classList.remove('active');
+}
+
+function updateRoutineProgress() {
+    const checkboxes = document.querySelectorAll('.routine-item input[type="checkbox"]');
+    const total = checkboxes.length;
+    let checked = 0;
+
+    // Save state
+    const routineState = [];
+
+    checkboxes.forEach((cb, index) => {
+        if (cb.checked) checked++;
+        routineState.push(cb.checked);
+    });
+
+    // Update progress bar
+    const percentage = (checked / total) * 100;
+    document.getElementById('routineProgress').style.width = `${percentage}%`;
+    document.getElementById('routineProgressText').textContent = `${checked} / ${total} Completed`;
+
+    // Save to localStorage
+    localStorage.setItem('routineState', JSON.stringify({
+        date: new Date().toDateString(),
+        state: routineState
+    }));
+
+    if (checked === total) {
+        showSuccessAnimation();
+    }
+}
+
+function loadRoutineProgress() {
+    const saved = JSON.parse(localStorage.getItem('routineState'));
+    const today = new Date().toDateString();
+
+    if (saved && saved.date === today) {
+        const checkboxes = document.querySelectorAll('.routine-item input[type="checkbox"]');
+        saved.state.forEach((state, index) => {
+            if (checkboxes[index]) checkboxes[index].checked = state;
+        });
+        updateRoutineProgress();
+    } else {
+        resetRoutine(false); // Silent reset for new day
+    }
+}
+
+function resetRoutine(showToastMsg = true) {
+    const checkboxes = document.querySelectorAll('.routine-item input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = false);
+    updateRoutineProgress();
+    if (showToastMsg) showToast('🔄 Routine reset');
+}
+
+function completeRoutine() {
+    const checkboxes = document.querySelectorAll('.routine-item input[type="checkbox"]');
+    const unchecked = Array.from(checkboxes).filter(cb => !cb.checked);
+
+    if (unchecked.length > 0) {
+        if (confirm(`You still have ${unchecked.length} items unchecked. Are you sure you want to start trading?`)) {
+            closePreMarketRoutine();
+            showToast('⚠️ Proceeding with incomplete routine. Be careful!');
+        }
+    } else {
+        closePreMarketRoutine();
+        showToast('✅ Routine complete! Good luck trading! 🚀');
+        confetti({
+            particleCount: 100,
+            spread: 70,
+            origin: { y: 0.6 }
+        });
+    }
+}
+
+function showSuccessAnimation() {
+    // Simple pulse effect on progress bar or similar could be added here
+}
+
+// ===== SIDEBAR TOGGLE =====
+function toggleSidebar() {
+    document.querySelector('.app-sidebar').classList.toggle('active');
+    document.querySelector('.sidebar-overlay').classList.toggle('active');
+}
+
+function openAddTradeModal() {
+    const modal = document.getElementById('saveModal');
+    if (modal) {
+        modal.classList.add('active');
+    } else {
+        console.error('Save Modal not found');
+        showToast('Error: Save Modal not found');
+    }
+}
+
+// ===== PREMIUM MODAL =====
+function openPremiumModal() {
+    const modal = document.getElementById('premiumModal');
+    if (modal) {
+        modal.classList.add('active');
+    }
+}
+
+function closePremiumModal() {
+    const modal = document.getElementById('premiumModal');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+    // Close sidebar if open (mobile)
+    const sidebar = document.querySelector('.app-sidebar');
+    if (sidebar && sidebar.classList.contains('active') && window.innerWidth <= 768) {
+        toggleSidebar();
+    }
+}
+
+// Initialize App
+window.addEventListener('DOMContentLoaded', () => {
+    init();
+});
